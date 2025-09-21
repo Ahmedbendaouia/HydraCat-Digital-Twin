@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Marine LiDAR 3D Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        :root {
+            --accent: #00d4aa;
+            --bg-dark: #0a0a0a;
+            --panel-bg: rgba(0,0,0,0.85);
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+            color: white;
+            overflow: hidden;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Controls panel moved to the right and compact */
+        #controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;          /* déplacé à droite */
+            left: auto;
+            z-index: 110;
+            background: var(--panel-bg);
+            padding: 14px;
+            border-radius: 12px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(0,212,170,0.25);
+            min-width: 260px;
+            max-width: 320px;
+            max-height: 86vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+
+        /* collapsed state */
+        #controls.collapsed {
+            width: 48px;
+            min-width: 48px;
+            max-width: 48px;
+            padding: 8px;
+            overflow: hidden;
+            text-align: center;
+        }
+
+        #controls .content {
+            transition: opacity 0.25s ease;
+        }
+
+        #controls.collapsed .content {
+            opacity: 0;
+            pointer-events: none;
+            height: 0;
+        }
+
+        .controls-title {
+            color: var(--accent);
+            margin: 0 0 12px 0;
+            font-size: 16px;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .control-group { margin-bottom: 12px; }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--accent);
+        }
+
+        select, button, .small-btn {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid rgba(0,212,170,0.18);
+            border-radius: 8px;
+            background: rgba(0,212,170,0.06);
+            color: white;
+            font-size: 13px;
+            margin-bottom: 6px;
+            cursor: pointer;
+        }
+
+        button:hover, .small-btn:hover { transform: translateY(-1px); }
+
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        #toggleControlsBtn {
+        position: absolute;
+        top: 10px;          /* proche du haut du panneau */
+        right: 100%;        /* juste à gauche du panneau */
+        margin-right: 6px;  /* petit espacement */
+        z-index: 120;
+        width: 24px;        /* petit carré */
+        height: 24px;
+        font-size: 14px;    /* lisible mais compact */
+        border-radius: 4px;
+        border: none;
+        background: #00b894; 
+        color: white;
+        cursor: pointer;
+        line-height: 24px;  /* centrer le texte verticalement */
+        text-align: center; /* centrer le texte horizontalement */
+        padding: 0;
+        transition: transform 0.2s;
+    }
+
+        #toggleControlsBtn:hover {
+            transform: scale(1.1);  /* effet léger au survol */
+        }
+
+        #status {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 110;
+            background: var(--panel-bg);
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(0,212,170,0.18);
+            max-width: 340px;
+            font-size: 13px;
+            backdrop-filter: blur(6px);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), #00b894);
+            width: 0%;
+            transition: width 0.25s linear;
+            border-radius: 3px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .stat-item {
+            background: rgba(0,212,170,0.06);
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .zoom-controls {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .zoom-btn { flex: 1; padding: 8px; font-size: 14px; }
+
+        /* Responsive: make panel full width at very small screens */
+        @media (max-width: 640px) {
+            #controls {
+                left: 10px;
+                right: 10px;
+                top: 10px;
+                min-width: auto;
+                max-width: calc(100vw - 20px);
+            }
+            #status { left: 10px; right: 10px; max-width: calc(100vw - 20px); }
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="controls">
+            <!-- Toggle button visible even when collapsed -->
+            <button id="toggleControlsBtn" title="Cacher / Afficher">⬅</button>
+
+            <div class="content">
+                <h3 class="controls-title">Marine LiDAR</h3>
+
+                <div class="control-group">
+                    <label for="speedMultiplier">Simulation Speed :</label>
+                    <select id="speedMultiplier">
+                        <option value="0.5">0.5x (Slow)</option>
+                        <option value="1" selected>1x (Normal)</option>
+                        <option value="2">2x (Fast)</option>
+                        <option value="5">5x (Very Fast)</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label for="pointsPerFrame">Points per Frame :</label>
+                    <select id="pointsPerFrame">
+                        <option value="100">100 (Smooth)</option>
+                        <option value="500" selected>500 (Normal)</option>
+                        <option value="1000">1000 (Dense)</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Camera Controls :</label>
+                    <div class="zoom-controls">
+                        <button class="zoom-btn" id="zoomInBtn">🔍+</button>
+                        <button class="zoom-btn" id="zoomOutBtn">🔍-</button>
+                        <button class="zoom-btn" id="resetViewBtn">🎯</button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <button id="startBtn" disabled>▶ Start Simulation</button>
+                    <button id="pauseBtn" disabled>⏸ Pause</button>
+                    <button id="resetBtn">↺ Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="status">
+            <div><strong>Status:</strong> <span id="statusText">Loading point.csv...</span></div>
+            <div><strong>Time:</strong> <span id="currentTime">--:--:--</span></div>
+
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <div class="stats">
+                <div class="stat-item">
+                    <div>Points</div>
+                    <div id="pointCount">0</div>
+                </div>
+                <div class="stat-item">
+                    <div>FPS</div>
+                    <div id="fps">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ---------- Globals ----------
+        let scene, camera, renderer, pointCloud;
+        let lidarData = [];
+        let animationId;
+        let isPlaying = false;
+        let currentIndex = 0;
+        let startTime, endTime, totalDuration;
+        let simulationStartTime;
+        let lastFpsUpdate = Date.now(); // fix: initialize to now
+        let frameCount = 0;
+
+        // Controls state
+        let cameraRadius = 20;
+        let cameraTheta = 0;
+        let cameraPhi = Math.PI / 4;
+        let mouseDown = false;
+        let mouseX = 0, mouseY = 0;
+
+        const MAX_POINTS = 30000;
+        let pointsPerFrame = 500;
+        let speedMultiplier = 1;
+
+        // DOM
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const resetViewBtn = document.getElementById('resetViewBtn');
+        const statusText = document.getElementById('statusText');
+        const currentTimeDisplay = document.getElementById('currentTime');
+        const progressFill = document.getElementById('progressFill');
+        const pointCountDisplay = document.getElementById('pointCount');
+        const fpsDisplay = document.getElementById('fps');
+        const toggleControlsBtn = document.getElementById('toggleControlsBtn');
+        const controlsPanel = document.getElementById('controls');
+
+        // ---------- Init ----------
+        init();
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+            scene.fog = new THREE.Fog(0x0a0a0a, 10, 100);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            updateCameraPosition();
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(20, 20, 10);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+
+            // Helpers
+            const gridHelper = new THREE.GridHelper(30, 60, 0x00d4aa, 0x333333);
+            gridHelper.material.opacity = 0.25;
+            gridHelper.material.transparent = true;
+            scene.add(gridHelper);
+            const axesHelper = new THREE.AxesHelper(8);
+            scene.add(axesHelper);
+
+            // Controls & listeners
+            setupCameraControls();
+            setupEventListeners();
+
+            // Auto load CSV or fallback
+            autoLoadPointCSV();
+
+            // initial render
+            renderer.render(scene, camera);
+        }
+
+        // ---------- CSV loading ----------
+        function autoLoadPointCSV() {
+            statusText.textContent = 'Auto-loading point.csv...';
+
+            fetch('/static/point.csv')
+                .then(response => {
+                    if (!response.ok) throw new Error('point.csv not found');
+                    return response.text();
+                })
+                .then(text => {
+                    Papa.parse(text, {
+                        header: true,
+                        skipEmptyLines: true,
+                        dynamicTyping: true,
+                        complete: function(results) {
+                            if (results.errors && results.errors.length > 0) {
+                                console.warn('CSV parsing errors:', results.errors);
+                                generateFallbackData();
+                                return;
+                            }
+                            processCSVData(results.data);
+                        },
+                        error: function(err) {
+                            console.error('PapaParse error', err);
+                            generateFallbackData();
+                        }
+                    });
+                })
+                .catch(err => {
+                    console.warn('Failed to fetch CSV, using fallback:', err);
+                    generateFallbackData();
+                });
+        }
+
+        function processCSVData(data) {
+            lidarData = [];
+
+            data.forEach((row, index) => {
+                if (row.x === undefined || row.y === undefined || row.z === undefined) return;
+
+                // try multiple time fields
+                const timeStr = row.host_clock || row.time || row.timestamp || `13:44:${Math.floor(index/100)%60}`;
+                const formatted = formatTimeString(timeStr, index);
+
+                const timestamp = timeToTimestamp(formatted);
+
+                lidarData.push({
+                    x: parseFloat(row.x) || 0,
+                    y: parseFloat(row.y) || 0,
+                    z: parseFloat(row.z) || 0,
+                    intensity: parseFloat(row.intensity) || 10,
+                    timestamp: timestamp,
+                    time: formatted
+                });
+            });
+
+            if (lidarData.length === 0) {
+                statusText.textContent = 'No valid data in CSV — generating fallback';
+                generateFallbackData();
+                return;
+            }
+
+            lidarData.sort((a,b) => a.timestamp - b.timestamp);
+            startBtn.disabled = false;
+            statusText.textContent = `${lidarData.length} points loaded from point.csv`;
+
+            setTimeout(() => { if (!isPlaying) autoStartSimulation(); }, 700);
+        }
+
+        function formatTimeString(timeStr, index) {
+            if (typeof timeStr === 'number') {
+                // seconds since midnight
+                const h = Math.floor(timeStr / 3600);
+                const m = Math.floor((timeStr % 3600) / 60);
+                const s = Math.floor(timeStr % 60);
+                return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+            }
+            if (typeof timeStr === 'string') {
+                // if already in H:M:S or M:S
+                if (timeStr.split(':').length === 3) return timeStr;
+                if (timeStr.split(':').length === 2) {
+                    const [mm, ss] = timeStr.split(':');
+                    return `13:${mm.padStart(2,'0')}:${Math.floor(parseFloat(ss)).toString().padStart(2,'0')}`;
+                }
+            }
+            return `13:44:${Math.floor(index/100)%60}`;
+        }
+
+        function generateFallbackData() {
+            statusText.textContent = 'Generating marine scan data...';
+            lidarData = [];
+
+            for (let i = 0; i < 8000; i++) {
+                const timeOffset = (i / 8000) * 15;
+                const totalSeconds = 13 * 3600 + 44 * 60 + 20 + timeOffset;
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = Math.floor(totalSeconds % 60);
+                const formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+                const angle = (i / 8000) * Math.PI * 6;
+                const radius = 3 + Math.random() * 12;
+                const height = -3 + Math.random() * 6;
+
+                let x, y, z, intensity;
+                if (i % 500 < 50) {
+                    x = Math.cos(angle) * 8 + Math.random() * 2;
+                    y = 1 + Math.random() * 2;
+                    z = Math.sin(angle) * 8 + Math.random() * 2;
+                    intensity = 15 + Math.random() * 10;
+                } else if (i % 300 < 30) {
+                    x = Math.cos(angle * 1.5) * 5 + Math.random() * 1;
+                    y = 0.5 + Math.random() * 1;
+                    z = Math.sin(angle * 1.5) * 5 + Math.random() * 1;
+                    intensity = 8 + Math.random() * 5;
+                } else {
+                    x = Math.cos(angle) * radius + (Math.random() - 0.5) * 1;
+                    y = height;
+                    z = Math.sin(angle) * radius + (Math.random() - 0.5) * 1;
+                    intensity = 5 + Math.random() * 15;
+                }
+
+                lidarData.push({
+                    x, y, z,
+                    intensity,
+                    timestamp: totalSeconds,
+                    time: formattedTime
+                });
+            }
+
+            lidarData.sort((a,b) => a.timestamp - b.timestamp);
+            startBtn.disabled = false;
+            statusText.textContent = `${lidarData.length} marine LiDAR points ready`;
+
+            setTimeout(() => { if (!isPlaying) autoStartSimulation(); }, 800);
+        }
+
+        // ---------- Simulation ----------
+        function autoStartSimulation() {
+            if (lidarData.length === 0) return;
+
+            startTime = lidarData[0].timestamp;
+            endTime = lidarData[lidarData.length - 1].timestamp;
+            totalDuration = endTime - startTime;
+
+            currentIndex = 0;
+            simulationStartTime = Date.now();
+
+            createPointCloud();
+
+            isPlaying = true;
+            startBtn.disabled = true;
+            pauseBtn.disabled = false;
+            pauseBtn.textContent = '⏸ Pause';
+            statusText.textContent = `Auto-simulation: ${lidarData.length} points`;
+
+            // reset fps timer
+            lastFpsUpdate = Date.now();
+            frameCount = 0;
+
+            animate();
+        }
+
+        function timeToTimestamp(timeStr) {
+            const parts = timeStr.split(':').map(parseFloat);
+            if (parts.length === 3) {
+                return parts[0]*3600 + parts[1]*60 + parts[2];
+            }
+            return 0;
+        }
+
+        function createPointCloud() {
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(MAX_POINTS * 3);
+            const colors = new Float32Array(MAX_POINTS * 3);
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.1,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.9,
+                sizeAttenuation: true
+            });
+
+            if (pointCloud) scene.remove(pointCloud);
+            pointCloud = new THREE.Points(geometry, material);
+            scene.add(pointCloud);
+        }
+
+        function updatePointCloud() {
+            if (!pointCloud || currentIndex >= lidarData.length) return;
+
+            const positions = pointCloud.geometry.attributes.position.array;
+            const colors = pointCloud.geometry.attributes.color.array;
+
+            const maxPointsToAdd = Math.min(pointsPerFrame, lidarData.length - currentIndex);
+            const visiblePoints = Math.min((currentIndex + maxPointsToAdd), MAX_POINTS);
+
+            for (let i = 0; i < maxPointsToAdd && currentIndex < lidarData.length; i++, currentIndex++) {
+                const point = lidarData[currentIndex];
+                const idx = (currentIndex % MAX_POINTS) * 3;
+
+                positions[idx] = point.x;
+                positions[idx + 1] = point.y;
+                positions[idx + 2] = point.z;
+
+                const intensityColor = Math.min(1, point.intensity / 20);
+                const heightColor = Math.min(1, Math.max(0, (point.y + 3)/6));
+
+                colors[idx] = Math.min(1, intensityColor + 0.2);
+                colors[idx + 1] = Math.min(1, heightColor + 0.4);
+                colors[idx + 2] = Math.min(1, 0.8 - intensityColor);
+            }
+
+            pointCloud.geometry.setDrawRange(0, visiblePoints);
+            pointCloud.geometry.attributes.position.needsUpdate = true;
+            pointCloud.geometry.attributes.color.needsUpdate = true;
+
+            const progress = (currentIndex / lidarData.length) * 100;
+            progressFill.style.width = `${progress}%`;
+            pointCountDisplay.textContent = visiblePoints.toLocaleString();
+
+            const currentPoint = lidarData[Math.min(currentIndex-1, lidarData.length-1)];
+            if (currentPoint) currentTimeDisplay.textContent = currentPoint.time;
+        }
+
+        function animate() {
+            if (!isPlaying) return;
+
+            updatePointCloud();
+
+            // FPS calculation
+            frameCount++;
+            const now = Date.now();
+            if (now - lastFpsUpdate >= 1000) {
+                fpsDisplay.textContent = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            renderer.render(scene, camera);
+
+            if (currentIndex < lidarData.length) {
+                animationId = requestAnimationFrame(animate);
+            } else {
+                statusText.textContent = 'Simulation completed — restarting...';
+                isPlaying = false;
+                startBtn.disabled = false;
+                pauseBtn.disabled = true;
+
+                setTimeout(() => {
+                    resetSimulation();
+                    setTimeout(() => { if (!isPlaying) autoStartSimulation(); }, 500);
+                }, 1800);
+            }
+        }
+
+        function resetSimulation() {
+            isPlaying = false;
+            currentIndex = 0;
+            if (animationId) cancelAnimationFrame(animationId);
+
+            startBtn.disabled = lidarData.length === 0;
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = '⏸ Pause';
+            statusText.textContent = lidarData.length > 0 ? 'Ready for simulation' : 'Loading data...';
+            currentTimeDisplay.textContent = '--:--:--';
+            progressFill.style.width = '0%';
+            pointCountDisplay.textContent = '0';
+
+            if (pointCloud) {
+                scene.remove(pointCloud);
+                pointCloud = null;
+            }
+        }
+
+        // ---------- Camera controls (simple orbit-like) ----------
+        function setupCameraControls() {
+            renderer.domElement.addEventListener('mousedown', onMouseDown);
+            renderer.domElement.addEventListener('mouseup', onMouseUp);
+            renderer.domElement.addEventListener('mousemove', onMouseMove);
+            renderer.domElement.addEventListener('wheel', onMouseWheel, { passive: false });
+
+            renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
+            renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false });
+            renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: true });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function onMouseDown(e) { mouseDown = true; mouseX = e.clientX; mouseY = e.clientY; }
+        function onMouseUp() { mouseDown = false; }
+        function onMouseMove(e) {
+            if (!mouseDown) return;
+            const dx = e.clientX - mouseX;
+            const dy = e.clientY - mouseY;
+            cameraTheta -= dx * 0.01;
+            cameraPhi += dy * 0.01;
+            cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+            updateCameraPosition();
+            mouseX = e.clientX; mouseY = e.clientY;
+        }
+        function onMouseWheel(e) {
+            cameraRadius += e.deltaY * 0.05;
+            cameraRadius = Math.max(5, Math.min(100, cameraRadius));
+            updateCameraPosition();
+            e.preventDefault();
+        }
+
+        function onTouchStart(e) {
+            if (e.touches.length === 1) {
+                mouseDown = true;
+                mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY;
+            }
+        }
+        function onTouchMove(e) {
+            if (e.touches.length === 1 && mouseDown) {
+                const dx = e.touches[0].clientX - mouseX;
+                const dy = e.touches[0].clientY - mouseY;
+                cameraTheta -= dx * 0.01;
+                cameraPhi += dy * 0.01;
+                cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+                updateCameraPosition();
+                mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY;
+                e.preventDefault();
+            }
+        }
+        function onTouchEnd() { mouseDown = false; }
+
+        function updateCameraPosition() {
+            camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+            camera.position.y = cameraRadius * Math.cos(cameraPhi);
+            camera.position.z = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+            camera.lookAt(0,0,0);
+        }
+
+        // ---------- UI events ----------
+        function setupEventListeners() {
+            startBtn.addEventListener('click', () => { if (!isPlaying) autoStartSimulation(); });
+
+            pauseBtn.addEventListener('click', () => {
+                isPlaying = !isPlaying;
+                pauseBtn.textContent = isPlaying ? '⏸ Pause' : '▶ Resume';
+                statusText.textContent = isPlaying ? 'Simulation running...' : 'Simulation paused';
+
+                if (isPlaying) {
+                    lastFpsUpdate = Date.now();
+                    frameCount = 0;
+                    animate();
+                } else if (animationId) {
+                    cancelAnimationFrame(animationId);
+                }
+            });
+
+            resetBtn.addEventListener('click', resetSimulation);
+
+            zoomInBtn.addEventListener('click', () => { cameraRadius = Math.max(5, cameraRadius - 3); updateCameraPosition(); });
+            zoomOutBtn.addEventListener('click', () => { cameraRadius = Math.min(100, cameraRadius + 3); updateCameraPosition(); });
+            resetViewBtn.addEventListener('click', () => { cameraRadius = 20; cameraTheta = 0; cameraPhi = Math.PI/4; updateCameraPosition(); });
+
+            document.getElementById('speedMultiplier').addEventListener('change', (e) => { speedMultiplier = parseFloat(e.target.value); });
+            document.getElementById('pointsPerFrame').addEventListener('change', (e) => { pointsPerFrame = parseInt(e.target.value); });
+
+            toggleControlsBtn.addEventListener('click', () => {
+                const isCollapsed = controlsPanel.classList.toggle('collapsed');
+                toggleControlsBtn.textContent = isCollapsed ? '➡' : '⬅';
+                // When collapsed, allow clicks through to canvas (optional)
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+    </script>
+</body>
+</html>

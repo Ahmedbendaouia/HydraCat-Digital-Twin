@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YOLOv8 Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; font-family: Arial, sans-serif; }
+        h1, h3 { color: #343a40; }
+        #realtime-stats { max-height: 400px; overflow-y: auto; margin-top: 10px; }
+        #realtime-stats li { font-size: 16px; font-weight: 500; }
+        .img-fluid { border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .table { background-color: #ffffff; border-radius: 5px; overflow: hidden; }
+        .table th { background-color: #007bff; color: white; }
+        .table td, .table th { text-align: center; vertical-align: middle; }
+        #row-limit { display: inline-block; width: auto; margin-left: 10px; }
+    </style>
+</head>
+<body class="p-4">
+
+<div class="container">
+    <h1 class="mb-4">YOLOv8 Camera Dashboard</h1>
+
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <h3>Camera Streaming</h3>
+            <img src="{{ url_for('video') }}" class="img-fluid border">
+        </div>
+        <div class="col-md-6">
+            <h3>Stats Temps Réel</h3>
+            <ul id="realtime-stats" class="list-group"></ul>
+        </div>
+    </div>
+
+    <h3>Historique Détections</h3>
+    <div class="mb-2">
+        <label>Nombre de lignes à afficher :</label>
+        <select id="row-limit" class="form-select w-auto d-inline-block">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="30">30</option>
+        </select>
+    </div>
+
+    <table id="history-table" class="table table-striped table-bordered">
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Count</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+const table = $('#history-table').DataTable({ paging: false, searching: false, info: false });
+
+// Stats temps réel
+setInterval(async () => {
+    const res = await fetch('/stats');
+    const data = await res.json();
+    const ul = document.getElementById('realtime-stats');
+    ul.innerHTML = '';
+    for (const [label, count] of Object.entries(data)) {
+        const li = document.createElement('li');
+        li.className = "list-group-item";
+        li.textContent = `${label}: ${count}`;
+        ul.appendChild(li);
+    }
+}, 1000);
+
+// Historique temps réel
+async function updateHistory() {
+    const limit = document.getElementById('row-limit').value;
+    const res = await fetch(`/history?limit=${limit}`);
+    const rows = await res.json();
+    table.clear();
+    rows.forEach(row => table.row.add([row[0], row[1], row[2]]));
+    table.draw();
+}
+
+setInterval(updateHistory, 3000);
+document.getElementById('row-limit').addEventListener('change', updateHistory);
+updateHistory();
+</script>
+
+</body>
+</html>
