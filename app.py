@@ -18,7 +18,7 @@ Prerequisites:
 - NumPy
 
 Installation:
-pip install flask opencv-python numpy
+pip install flask opencv-python numpy psutil ultralytics opencv-python
 
 Usage:
 python app.py
@@ -29,6 +29,7 @@ Access:
 """
 
 from flask import Flask, render_template, jsonify, Response, request
+from ultralytics import YOLO
 from datetime import datetime, timedelta
 import random
 import cv2
@@ -56,8 +57,8 @@ class EnhancedCameraManager:
     - Provides simulated underwater camera feed
     - Handles video streaming and image capture
     - Automatic diagnostics and error recovery
-    """
-    
+    """ 
+
     def __init__(self):
         self.cameras = {}
         self.camera_stats = {
@@ -67,6 +68,8 @@ class EnhancedCameraManager:
         self.mock_camera_active = False
         self.last_reconnect_attempt = 0
         self.reconnect_interval = 30  # Reconnection attempt every 30 seconds
+        self.yolo_model = YOLO("yolov8s.pt") # THE YOLO MODEL
+        # ^ The yolov8s model is used for real time apps
         
         # Launch diagnostics and initialization
         self.run_comprehensive_diagnostics()
@@ -307,27 +310,61 @@ class EnhancedCameraManager:
         else:
             return self.create_placeholder_frame('pc')
     
+    # assign a fixed random color for each class (person, car, etc)
+    def get_color_for_class(self, cls_id):
+        random.seed(cls_id)  # ensures same class always gets same color
+        return tuple(random.randint(0, 255) for _ in range(3))
+
     def process_clean_pc_frame(self, frame):
-        """Process real PC camera frame (clean for YOLO)"""
-        # Clean image processing
+        """Process real PC camera frame (with YOLO detection overlay)"""
         height, width = frame.shape[:2]
-        
-        # Minimal overlay
+        detections = []
+
+        # --- YOLO inference ---
+        results = self.yolo_model(frame, verbose=False)
+        for r in results:
+            for box in r.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])  # bounding box
+                cls = int(box.cls[0])    # class id, sets index to categorize groups
+                conf = float(box.conf[0]) # confidence, how certain a object is
+                label = f"{self.yolo_model.names[cls]} {conf:.2f}" # Displays class and confidence
+                name = self.yolo_model.names[cls]       # class name
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Timestamp
+
+                 # Detection record
+                detection = {
+                    "name": name,
+                    "confidence": round(conf, 2),
+                    "timestamp": timestamp,
+                    "coords": (x1, y1, x2, y2)
+                }
+                detections.append(detection)
+
+                # ---- Write to report file ----
+                with open("yolo_report.txt", "a") as f:
+                    f.write(json.dumps(detection) + "\n")
+
+                # colors for boxes (randomized for now)
+                color = self.get_color_for_class(cls)
+
+                # draw boxes
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # --- Overlay info ---
         cv2.rectangle(frame, (0, 0), (width, 25), (0, 0, 0), -1)
-        cv2.putText(frame, f'PC Camera - {datetime.now().strftime("%H:%M:%S")}', 
-                   (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        # YOLO ready indicator
-        cv2.putText(frame, 'YOLO Ready', (width-100, 18), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-        
-        # Connection status indicator
-        status_color = (0, 255, 0)  # Green for connected
-        cv2.circle(frame, (width-20, 35), 5, status_color, -1)
-        
+        cv2.putText(frame, f'PC Camera - {datetime.now().strftime("%H:%M:%S")}',
+                (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(frame, 'YOLO Active', (width-100, 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+        cv2.circle(frame, (width-20, 35), 5, (0, 255, 0), -1)
+
+        # encode for streaming
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         self.camera_stats['pc_camera']['frames_captured'] += 1
         return buffer.tobytes()
+
     
     def create_mock_pc_frame(self):
         """Create simulated PC camera frame for testing"""
