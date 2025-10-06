@@ -71,6 +71,22 @@ class EnhancedCameraManager:
         self.yolo_model = YOLO("yolov8s.pt") # THE YOLO MODEL
         # ^ The yolov8s model is used for real time apps
         
+        # Red Zone (Red Box) in Camera
+        self.red_zone = {
+            "x1": 200,  # top-left corner
+            "y1": 150,
+            "x2": 440,  # bottom-right corner
+            "y2": 330
+        }
+
+        # To reduce the amount of images being saved by adding a counter 
+        self.red_zone_frame_counter = 0
+        self.frames_required_to_trigger = 5  # number of continuous frames inside zone
+
+        # Red zone state tracking
+        self.object_in_red_zone = False
+        self.red_zone_trigger_time = None # Tracks exact time object enters red zone
+
         # Launch diagnostics and initialization
         self.run_comprehensive_diagnostics()
         self.init_cameras_with_fallbacks()
@@ -319,9 +335,20 @@ class EnhancedCameraManager:
         """Process real PC camera frame (with YOLO detection overlay)"""
         height, width = frame.shape[:2]
         detections = []
+        detections_in_zone = []
+        CONFIDENCE_THRESHOLD = 0.7 # The percentage of accuracy needed for object to be detected in red zone 
+
+        # Draw red zone box (visual reference)
+        cv2.rectangle(frame,
+                    (self.red_zone["x1"], self.red_zone["y1"]),
+                    (self.red_zone["x2"], self.red_zone["y2"]),
+                    (0, 0, 255), 2)  # red box
 
         # --- YOLO inference ---
         results = self.yolo_model(frame, verbose=False)
+        object_in_zone = False # Red Alert Boolean
+
+
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])  # bounding box
@@ -330,6 +357,10 @@ class EnhancedCameraManager:
                 label = f"{self.yolo_model.names[cls]} {conf:.2f}" # Displays class and confidence
                 name = self.yolo_model.names[cls]       # class name
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Timestamp
+
+                # Skip low-confidence detections
+                if conf < CONFIDENCE_THRESHOLD:
+                    continue  # skip this object
 
                  # Detection record
                 detection = {
@@ -340,17 +371,55 @@ class EnhancedCameraManager:
                 }
                 detections.append(detection)
 
-                # ---- Write to report file ----
-                with open("yolo_report.txt", "a") as f:
-                    f.write(json.dumps(detection) + "\n")
+                # Check if YOLO detection box is fully (or mostly) inside red zone
+                box_center_x = (x1 + x2) // 2
+                box_center_y = (y1 + y2) // 2
+
+                # The object is considered inside ONLY if its center is inside the red zone
+                if (self.red_zone["x1"] <= box_center_x <= self.red_zone["x2"] and
+                    self.red_zone["y1"] <= box_center_y <= self.red_zone["y2"]):
+                    # object_in_zone = True
+                    detections_in_zone.append({
+                        "name": name,
+                        "confidence": round(conf, 2),
+                        "timestamp": timestamp,
+                        "coords": (x1, y1, x2, y2)
+                    })
 
                 # colors for boxes (randomized for now)
                 color = self.get_color_for_class(cls)
-
                 # draw boxes
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, label, (x1, y1 - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # authoritative red-zone flag (use this)
+            object_in_zone = len(detections_in_zone) > 0
+
+            # Red Zone Logic     
+            if object_in_zone and not self.object_in_red_zone:
+                self.object_in_red_zone = True
+                self.red_zone_trigger_time = datetime.now()
+
+                # Save report entry
+                alert = {
+                    "event": "Object entered red zone",
+                    "timestamp": self.red_zone_trigger_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "objects": [d["name"] for d in detections_in_zone],
+                }
+
+                with open("yolo_redzone_log.txt", "a") as f:
+                    f.write(json.dumps(alert) + "\n")
+                    # f.write(json.dumps(detection) + "\n")
+
+                # Take one snapshot
+                screenshot_path = f"redzone_capture_{self.red_zone_trigger_time.strftime('%H%M%S')}.jpg"
+                cv2.imwrite(screenshot_path, frame)
+                print(f"!!! -- Red zone breach detected! Snapshot saved: {screenshot_path} -- !!!")
+
+            elif not object_in_zone and self.object_in_red_zone:
+                self.object_in_red_zone = False
+                print(" !!Red zone cleared!!")
 
         # --- Overlay info ---
         cv2.rectangle(frame, (0, 0), (width, 25), (0, 0, 0), -1)

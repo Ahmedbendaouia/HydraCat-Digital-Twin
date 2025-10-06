@@ -1,0 +1,1 @@
+{"event": "Object entered red zone", "timestamp": "2025-10-05 23:32:19", "objects": ["person"]}
