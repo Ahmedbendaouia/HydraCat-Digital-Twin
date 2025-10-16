@@ -1,1 +1,2 @@
-{"event": "Object entered red zone", "timestamp": "2025-10-05 23:32:19", "objects": ["person"]}
+{"event": "Object ENTERED red zone", "timestamp": "2025-10-15 21:06:58", "objects": [{"name": "person", "confidence": 0.92, "coords": [34, 153, 379, 479]}]}
+{"event": "Object LEFT red zone", "timestamp": "2025-10-15 21:07:01"}
